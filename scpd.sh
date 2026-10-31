@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Usage: scpd [-t target] [-i keyfile] [-u user] [-H host] <path>...
+# Usage: scpd [-t target] [-i keyfile] [-U user] [-H host] <path>...
+#        scpd -u <local-path>... <remote-folder>   (upload)
 # Folders use rsync -a when available on both sides, else scp -r.
 # A path ending with '/' is downloaded as a folder, otherwise as a file.
 # Connection settings come from named targets in scpd.conf (see README.md).
@@ -8,7 +9,6 @@ set -euo pipefail
 KEY=""
 USER_NAME=""
 HOST=""
-DEST=""
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="${DOWNLOAD_CONF:-$SCRIPT_DIR/scpd.conf}"
@@ -72,7 +72,7 @@ conf_default() {
   printf '%s' "$first"
 }
 
-# Load KEY, USER_NAME, HOST and DEST from the named target; fails if it does not exist.
+# Load KEY, USER_NAME and HOST from the named target; fails if it does not exist.
 conf_load() {
   local want="$1" line sec="" found=1 k v
   local header_re='^\[([^]]+)\]$' kv_re='^([A-Za-z_]+)[[:space:]]*=(.*)$'
@@ -93,7 +93,6 @@ conf_load() {
         key) KEY="$v" ;;
         user) USER_NAME="$v" ;;
         host) HOST="$v" ;;
-        dest) DEST="$v" ;;
       esac
     fi
   done < "$CONFIG"
@@ -102,7 +101,7 @@ conf_load() {
 
 # Add or replace a target, rewriting the config file.
 save_target() {
-  local name="$1" key="$2" user="$3" host="$4" dest="$5" make_default="$6" dflt tmp
+  local name="$1" key="$2" user="$3" host="$4" make_default="$5" dflt tmp
   dflt="$(conf_explicit_default)"
   if [[ "$make_default" == true ]]; then
     dflt="$name"
@@ -125,7 +124,7 @@ save_target() {
         !skip { print }
       ' "$CONFIG"
     fi
-    printf '\n[%s]\nkey = %s\nuser = %s\nhost = %s\ndest = %s\n' "$name" "$key" "$user" "$host" "$dest"
+    printf '\n[%s]\nkey = %s\nuser = %s\nhost = %s\n' "$name" "$key" "$user" "$host"
   } | cat -s | sed '1{/^$/d}' > "$tmp"
   mv -- "$tmp" "$CONFIG"
 }
@@ -149,7 +148,7 @@ ask() {
 
 # Interactively add or edit a target (existing values are offered as defaults).
 configure_target() {
-  local name="${1:-}" key user host dest suggested="" answer make_default=false first_run=false
+  local name="${1:-}" key user host suggested="" answer make_default=false first_run=false
   if [[ ! -t 0 ]]; then
     echo "Configuring a target needs an interactive terminal." >&2
     exit 1
@@ -166,20 +165,19 @@ configure_target() {
     exit 1
   fi
 
-  KEY="" USER_NAME="" HOST="" DEST=""
+  KEY="" USER_NAME="" HOST=""
   if conf_load "$name"; then
     echo "Editing existing target '$name'."
   fi
   ask key "SSH key file" "$KEY"
   ask user "Remote username" "$USER_NAME"
   ask host "Remote host" "$HOST"
-  ask dest "Download folder" "${DEST:-./scp}"
 
   if [[ "$first_run" != true && "$(conf_default)" != "$name" ]]; then
     read -r -p "Make '$name' the default target? [y/N] " answer
     [[ "$answer" == [yY]* ]] && make_default=true
   fi
-  save_target "$name" "$key" "$user" "$host" "$dest" "$make_default"
+  save_target "$name" "$key" "$user" "$host" "$make_default"
   echo "Saved target '$name' in $CONFIG"
 }
 
@@ -192,10 +190,10 @@ list_targets() {
   d="$(conf_default)"
   while IFS= read -r name; do
     (
-      KEY="" USER_NAME="" HOST="" DEST=""
+      KEY="" USER_NAME="" HOST=""
       conf_load "$name" || true
-      printf '%s%s  %s@%s  key=%s  dest=%s\n' "$name" "$([[ "$name" == "$d" ]] && echo ' (default)')" \
-        "$USER_NAME" "$HOST" "$KEY" "$DEST"
+      printf '%s%s  %s@%s  key=%s\n' "$name" "$([[ "$name" == "$d" ]] && echo ' (default)')" \
+        "$USER_NAME" "$HOST" "$KEY"
     )
   done < <(conf_targets)
 }
@@ -309,17 +307,20 @@ usage() {
   local status="${1:-1}" out=1
   [[ "$status" -eq 0 ]] || out=2
   cat >&"$out" <<'EOF'
-Usage: scpd [-t target] [-i keyfile] [-u user] [-H host] [-x pattern] <path>...
+Usage: scpd [-t target] [-i keyfile] [-U user] [-H host] [-x pattern] <path>...
+       scpd -u [-t target] <local-path>... <remote-folder>
        scpd -l [-t target] <path>...
        scpd -c [name] | -T | -d | -h
 
   -t  use this target from scpd.conf (default: the configured default,
       otherwise the first target)
   -i  override the target's key file
-  -u  override the target's remote username
+  -U  override the target's remote username
+  -u  upload local file(s)/folder(s) into an existing remote folder (the last
+      argument); a folder is uploaded as a whole, not just its contents
   -H  override the target's remote host
   -x  exclude folder contents matching PATTERN (repeatable, e.g. -x node_modules);
-      folder downloads only, needs rsync on both machines
+      folder transfers only, needs rsync on both machines
   -l  list remote path(s) instead of downloading
   -c  add or edit a target (asks for its values)
   -T  list configured targets
@@ -332,18 +333,20 @@ EOF
 }
 
 MODE="download"
+UPLOAD=false
 TARGET=""
 OPT_KEY="" OPT_USER="" OPT_HOST=""
 SSH_EXTRA=()
 EXCLUDES=()
 
 # -C (complete) and -N (print target names) are internal flags used by the tab completion script.
-while getopts "t:i:u:H:x:hdlcTCN" opt; do
+while getopts "t:i:U:H:x:uhdlcTCN" opt; do
   case "$opt" in
     t) TARGET="$OPTARG" ;;
     i) OPT_KEY="$OPTARG" ;;
-    u) OPT_USER="$OPTARG" ;;
+    U) OPT_USER="$OPTARG" ;;
     H) OPT_HOST="$OPTARG" ;;
+    u) UPLOAD=true ;;
     x) EXCLUDES+=("$OPTARG") ;;
     d) open_docs; exit 0 ;;
     l) MODE="list" ;;
@@ -383,12 +386,6 @@ case "$MODE" in
   complete) complete_paths "$1"; exit 0 ;;
 esac
 
-if [[ -z "$DEST" ]]; then
-  echo "Missing 'dest' for the selected target. Run: scpd -c" >&2
-  exit 1
-fi
-mkdir -p "$DEST"
-
 RSYNC_EXCLUDES=()
 for pat in ${EXCLUDES[@]+"${EXCLUDES[@]}"}; do
   RSYNC_EXCLUDES+=(--exclude "$pat")
@@ -405,6 +402,46 @@ have_rsync() {
   [[ "$RSYNC_OK" == yes ]]
 }
 
+if [[ "$UPLOAD" == true ]]; then
+  if [[ $# -lt 2 ]]; then
+    echo "Usage: scpd -u <local-path>... <remote-folder>" >&2
+    exit 1
+  fi
+  rdest="${!#}"
+  case "$rdest" in
+    "~"*|/*) ;;
+    *) echo "Destination must start with ~ or /: $rdest" >&2; exit 1 ;;
+  esac
+  rdest="$(resolve_remote_path "$rdest")"
+  [[ "$rdest" == "/" ]] || rdest="${rdest%/}"
+  if ! run_ssh "test -d $(remote_quote "$rdest")" 2>/dev/null; then
+    echo "Destination is not a folder on the remote host: $rdest" >&2
+    exit 1
+  fi
+  [[ "$rdest" == */ ]] || rdest="$rdest/"
+  srcs=("${@:1:$#-1}")
+  for src in "${srcs[@]}"; do
+    [[ -e "$src" ]] || { echo "Local path not found: $src" >&2; exit 1; }
+  done
+  for src in "${srcs[@]}"; do
+    [[ "$src" == "/" ]] || src="${src%/}"
+    if [[ -d "$src" ]]; then
+      if have_rsync; then
+        rsync -a "${RSYNC_EXCLUDES[@]}" -e "ssh -i $(printf '%q' "$KEY")" "$src" "$USER_NAME@$HOST:$rdest"
+      elif [[ ${#EXCLUDES[@]} -gt 0 ]]; then
+        echo "-x needs rsync on both this machine and the remote host." >&2
+        exit 1
+      else
+        echo "rsync not available on both sides; using scp -r (symlinks are copied as regular files)." >&2
+        scp -i "$KEY" -r "$src" "$USER_NAME@$HOST:$rdest"
+      fi
+    else
+      scp -i "$KEY" "$src" "$USER_NAME@$HOST:$rdest"
+    fi
+  done
+  exit 0
+fi
+
 for target in "$@"; do
   case "$target" in
     "~"*|/*) ;;
@@ -416,15 +453,15 @@ for target in "$@"; do
     remote="${target%/}"
     if have_rsync; then
       # -a keeps symlinks, permissions and timestamps (scp -r would follow symlinks).
-      rsync -a "${RSYNC_EXCLUDES[@]}" -e "ssh -i $(printf '%q' "$KEY")" "$USER_NAME@$HOST:$remote" "$DEST/"
+      rsync -a "${RSYNC_EXCLUDES[@]}" -e "ssh -i $(printf '%q' "$KEY")" "$USER_NAME@$HOST:$remote" .
     elif [[ ${#EXCLUDES[@]} -gt 0 ]]; then
       echo "-x needs rsync on both this machine and the remote host." >&2
       exit 1
     else
       echo "rsync not available on both sides; using scp -r (symlinks are copied as regular files)." >&2
-      scp -i "$KEY" -r "$USER_NAME@$HOST:$remote" "$DEST/"
+      scp -i "$KEY" -r "$USER_NAME@$HOST:$remote" .
     fi
   else
-    scp -i "$KEY" "$USER_NAME@$HOST:$target" "$DEST/"
+    scp -i "$KEY" "$USER_NAME@$HOST:$target" .
   fi
 done

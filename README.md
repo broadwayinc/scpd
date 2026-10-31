@@ -19,7 +19,7 @@ Connection settings are stored as named **targets** in `scpd.conf`, in the same 
 Add a target, or edit an existing one, at any time:
 
 ```bash
-scpd -c            # asks for a name, key file, username, host and download folder
+scpd -c            # asks for a name, key file, username and host
 scpd -c staging    # same, for the target named "staging"
 scpd -T            # list targets
 ```
@@ -33,16 +33,14 @@ default = work
 key = ~/.ssh/work.pem
 user = ubuntu
 host = work.example.com
-dest = ./scp
 
 [staging]
 key = ~/.ssh/staging.pem
 user = deploy
 host = staging.example.com
-dest = ./staging-files
 ```
 
-`default` must come before the first section. Values may start with `~` or `$HOME`. A target needs `key`, `user`, `host` and `dest`.
+`default` must come before the first section. Values may start with `~` or `$HOME`. A target needs `key`, `user` and `host`.
 
 To use a config file at another location, set `DOWNLOAD_CONF`:
 
@@ -95,18 +93,26 @@ scpd -t staging /remote/path/file.txt
 Override the key, username, or host of the chosen target for one invocation:
 
 ```bash
-scpd -i "$HOME/.ssh/other.pem" -u ubuntu -H example.com /remote/path/file.txt
+scpd -i "$HOME/.ssh/other.pem" -U ubuntu -H example.com /remote/path/file.txt
 ```
+
+Upload with `-u` (the username override is `-U`). The last argument is the remote destination, which must be an existing folder (with or without a trailing `/`), otherwise an error is shown. A folder is uploaded as a whole, not just its contents. Local sources and the remote destination both tab-complete.
+
+```bash
+scpd -u /file/to/upload ~/destination/folder
+scpd -u folder/to/upload/ ~/destination/
+```
+
 
 Folders (paths ending in `/`) are downloaded with `rsync -a` when rsync is installed on both machines, which preserves symlinks, permissions and timestamps. Otherwise `scpd` falls back to `scp -r`, which copies symlinks as regular files (this breaks `node_modules/.bin`). Use `-x PATTERN` (repeatable, needs rsync) to skip files, e.g. `scpd -x node_modules /remote/project/`.
 
-Downloads go to the target's `dest`, and a relative `dest` or key path such as `./scp` is resolved from the directory where you run `scpd`.
+Downloads go to the current directory.
 
 ## Tab completion
 
 `install-scpd.sh` offers to add a small block to `~/.bashrc` that loads `scpd-completion.bash`. Use `./install-scpd.sh --completion` to accept without a prompt or `--no-completion` to skip it. Reinstalling updates the block, and `uninstall-scpd.sh` removes it.
 
-After opening a new terminal, press Tab while typing a remote path and `scpd` connects over SSH to complete it. Tab behaves like normal path completion, and only the `scpd` command is affected. Directories end with `/`, and `-t`, `-i`, `-u` and `-H` options you already typed are used for the lookup. `-t` also completes target names. Completion uses key authentication only (no password prompts), so the first connection to a host must already be trusted by SSH. Connections are reused for 60 seconds, so repeated Tab presses are faster.
+After opening a new terminal, press Tab while typing a remote path and `scpd` connects over SSH to complete it. Tab behaves like normal path completion, and only the `scpd` command is affected. Directories end with `/`, and `-t`, `-i`, `-U` and `-H` options you already typed are used for the lookup. `-t` also completes target names. Completion uses key authentication only (no password prompts), so the first connection to a host must already be trusted by SSH. Connections are reused for 60 seconds, so repeated Tab presses are faster.
 
 ## Move or uninstall
 
