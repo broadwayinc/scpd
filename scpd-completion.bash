@@ -18,7 +18,7 @@ _scpd_complete() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   local prev="" i line esc
   local -a flags=() lines=()
-  local upload=false pos=0 w
+  local upload=false pos=0 w remote_only=false
   COMPREPLY=()
   [[ $COMP_CWORD -ge 1 ]] && prev="${COMP_WORDS[COMP_CWORD-1]}"
 
@@ -26,6 +26,7 @@ _scpd_complete() {
     -i) mapfile -t COMPREPLY < <(compgen -f -- "$cur"); return 0 ;;
     -t) mapfile -t COMPREPLY < <(compgen -W "$(bash "$_SCPD_SH" -N 2>/dev/null)" -- "$cur"); return 0 ;;
     -U|-H|-x) return 0 ;;
+    -xr) remote_only=true ;;
   esac
 
   # Reuse any -t/-i/-U/-H the user already typed.
@@ -45,20 +46,20 @@ _scpd_complete() {
     w="${COMP_WORDS[i]}"
     case "$w" in
       -u) upload=true ;;
-      -t|-i|-U|-H|-x) ((i++)) ;;
+      -t|-i|-U|-H|-x|-xr) ((i++)) ;;
       -*) ;;
       *) ((pos++)) ;;
     esac
   done
 
   if [[ "$cur" == -* ]]; then
-    mapfile -t COMPREPLY < <(compgen -W "-t -i -u -U -H -x -l -c -T -d -h" -- "$cur")
+    mapfile -t COMPREPLY < <(compgen -W "-t -i -u -U -H -x -xr -l -c -T -d -h" -- "$cur")
     return 0
   fi
 
   # Upload: the first argument is always local; later ones are more local sources (relative
   # paths) or the remote destination (starting with ~ or /, or empty).
-  if [[ "$upload" == true ]] && { ((pos == 0)) || [[ -n "$cur" && "$cur" != "~"* && "$cur" != /* ]]; }; then
+  if [[ "$upload" == true && "$remote_only" == false ]] && { ((pos == 0)) || [[ -n "$cur" && "$cur" != "~"* && "$cur" != /* ]]; }; then
     _scpd_complete_local "$cur"
     return 0
   fi
@@ -74,8 +75,8 @@ _scpd_complete() {
   mapfile -t lines < <(bash "$_SCPD_SH" "${flags[@]}" -C "$cur" 2>/dev/null)
 
   for line in "${lines[@]}"; do
-    # Upload destinations must be folders.
-    [[ "$upload" == true && "$line" != */ ]] && continue
+    # Upload destinations must be folders (an -xr argument is a file, so it is not filtered).
+    [[ "$upload" == true && "$remote_only" == false && "$line" != */ ]] && continue
     case "$q" in
       "'")
         esc="'${line//\'/\'\\\'\'}"

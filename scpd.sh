@@ -307,7 +307,7 @@ usage() {
   local status="${1:-1}" out=1
   [[ "$status" -eq 0 ]] || out=2
   cat >&"$out" <<'EOF'
-Usage: scpd [-t target] [-i keyfile] [-U user] [-H host] [-x pattern] <path>...
+Usage: scpd [-t target] [-i keyfile] [-U user] [-H host] [-x pattern] [-xr remote-file] <path>...
        scpd -u [-t target] <local-path>... <remote-folder>
        scpd -l [-t target] <path>...
        scpd -c [name] | -T | -d | -h
@@ -321,6 +321,8 @@ Usage: scpd [-t target] [-i keyfile] [-U user] [-H host] [-x pattern] <path>...
   -H  override the target's remote host
   -x  exclude folder contents matching PATTERN (repeatable, e.g. -x node_modules);
       folder transfers only, needs rsync on both machines
+  -xr read exclude patterns from a file on the remote host (repeatable, e.g.
+      -xr ~/project/.gitignore); same limits as -x
   -l  list remote path(s) instead of downloading
   -c  add or edit a target (asks for its values)
   -T  list configured targets
@@ -338,9 +340,18 @@ TARGET=""
 OPT_KEY="" OPT_USER="" OPT_HOST=""
 SSH_EXTRA=()
 EXCLUDES=()
+EXCLUDE_REMOTE=()
 
 # -C (complete) and -N (print target names) are internal flags used by the tab completion script.
-while getopts "t:i:U:H:x:uhdlcTCN" opt; do
+# getopts cannot take a two-letter option, so -xr becomes the internal -R.
+ARGS=()
+for a in "$@"; do
+  [[ "$a" == "-xr" ]] && a="-R"
+  ARGS+=("$a")
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
+while getopts "t:i:U:H:x:R:uhdlcTCN" opt; do
   case "$opt" in
     t) TARGET="$OPTARG" ;;
     i) OPT_KEY="$OPTARG" ;;
@@ -348,6 +359,7 @@ while getopts "t:i:U:H:x:uhdlcTCN" opt; do
     H) OPT_HOST="$OPTARG" ;;
     u) UPLOAD=true ;;
     x) EXCLUDES+=("$OPTARG") ;;
+    R) EXCLUDE_REMOTE+=("$OPTARG") ;;
     d) open_docs; exit 0 ;;
     l) MODE="list" ;;
     c) MODE="configure" ;;
@@ -399,6 +411,22 @@ for pat in ${EXCLUDES[@]+"${EXCLUDES[@]}"}; do
   RSYNC_EXCLUDES+=(--exclude "$pat")
 done
 
+# Fetch each remote exclude file; gitignore-style '!' re-includes have no rsync equivalent, so they are skipped.
+for rf in ${EXCLUDE_REMOTE[@]+"${EXCLUDE_REMOTE[@]}"}; do
+  case "$rf" in
+    "~"*|/*) ;;
+    *) echo "Exclude file must start with ~ or /: $rf" >&2; exit 1 ;;
+  esac
+  rf="$(resolve_remote_path "$rf")"
+  if ! content="$(run_ssh "cat -- $(remote_quote "$rf")" 2>/dev/null)"; then
+    echo "Cannot read remote exclude file: $rf" >&2
+    exit 1
+  fi
+  [[ -n "${EXCLUDE_TMP:-}" ]] || { EXCLUDE_TMP="$(mktemp)"; trap 'rm -f "$EXCLUDE_TMP"' EXIT; }
+  printf '%s\n' "$content" | tr -d '\r' | grep -v '^!' >> "$EXCLUDE_TMP" || true
+done
+[[ -z "${EXCLUDE_TMP:-}" ]] || RSYNC_EXCLUDES+=(--exclude-from "$EXCLUDE_TMP")
+
 # True when rsync exists locally and on the remote host (checked once).
 have_rsync() {
   if [[ -z "${RSYNC_OK:-}" ]]; then
@@ -436,8 +464,8 @@ if [[ "$UPLOAD" == true ]]; then
     if [[ -d "$src" ]]; then
       if have_rsync; then
         rsync -a "${RSYNC_PROGRESS[@]}" "${RSYNC_EXCLUDES[@]}" -e "$RSYNC_SSH" "$src" "$USER_NAME@$HOST:$rdest"
-      elif [[ ${#EXCLUDES[@]} -gt 0 ]]; then
-        echo "-x needs rsync on both this machine and the remote host." >&2
+      elif [[ ${#RSYNC_EXCLUDES[@]} -gt 0 ]]; then
+        echo "-x/-xr need rsync on both this machine and the remote host." >&2
         exit 1
       else
         echo "rsync not available on both sides; using scp -r (symlinks are copied as regular files)." >&2
@@ -462,8 +490,8 @@ for target in "$@"; do
     if have_rsync; then
       # -a keeps symlinks, permissions and timestamps (scp -r would follow symlinks).
       rsync -a "${RSYNC_PROGRESS[@]}" "${RSYNC_EXCLUDES[@]}" -e "$RSYNC_SSH" "$USER_NAME@$HOST:$remote" .
-    elif [[ ${#EXCLUDES[@]} -gt 0 ]]; then
-      echo "-x needs rsync on both this machine and the remote host." >&2
+    elif [[ ${#RSYNC_EXCLUDES[@]} -gt 0 ]]; then
+      echo "-x/-xr need rsync on both this machine and the remote host." >&2
       exit 1
     else
       echo "rsync not available on both sides; using scp -r (symlinks are copied as regular files)." >&2

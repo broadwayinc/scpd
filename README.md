@@ -106,6 +106,8 @@ scpd -u folder/to/upload/ ~/destination/
 
 Folders (paths ending in `/`) are downloaded with `rsync -a` when rsync is installed on both machines, which preserves symlinks, permissions and timestamps. Otherwise `scpd` falls back to `scp -r`, which copies symlinks as regular files (this breaks `node_modules/.bin`). Use `-x PATTERN` (repeatable, needs rsync) to skip files, e.g. `scpd -x node_modules /remote/project/`.
 
+Use `-xr REMOTE_FILE` (repeatable, needs rsync) to read exclude patterns from a file on the remote host, e.g. `scpd -xr ~/project/.gitignore ~/project/`. It also works with `-u`. Blank lines and `#` comments are ignored; gitignore `!` re-include lines are skipped because rsync does not support them, so a few gitignore patterns may behave slightly differently.
+
 Downloads go to the current directory.
 
 ## Tab completion
