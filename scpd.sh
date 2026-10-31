@@ -381,11 +381,19 @@ for field in KEY USER_NAME HOST; do
 done
 [ -f "$KEY" ] || { echo "Key file not found: $KEY" >&2; exit 1; }
 
+# One shared ssh connection (kept open for 60s) serves every check and transfer in this run.
+MUX_OPTS=(-o ControlMaster=auto -o ControlPersist=60
+  -o "ControlPath=${XDG_RUNTIME_DIR:-$HOME/.ssh}/scpd-%C")
+SSH_EXTRA=("${MUX_OPTS[@]}")
+RSYNC_SSH="ssh -i $(printf '%q' "$KEY")$(printf ' %q' "${MUX_OPTS[@]}")"
+
 case "$MODE" in
   list) list_paths "$@"; exit 0 ;;
   complete) complete_paths "$1"; exit 0 ;;
 esac
 
+# rsync prints each file name with its progress; scp does the same on a terminal.
+RSYNC_PROGRESS=(-v -h --progress)
 RSYNC_EXCLUDES=()
 for pat in ${EXCLUDES[@]+"${EXCLUDES[@]}"}; do
   RSYNC_EXCLUDES+=(--exclude "$pat")
@@ -427,16 +435,16 @@ if [[ "$UPLOAD" == true ]]; then
     [[ "$src" == "/" ]] || src="${src%/}"
     if [[ -d "$src" ]]; then
       if have_rsync; then
-        rsync -a "${RSYNC_EXCLUDES[@]}" -e "ssh -i $(printf '%q' "$KEY")" "$src" "$USER_NAME@$HOST:$rdest"
+        rsync -a "${RSYNC_PROGRESS[@]}" "${RSYNC_EXCLUDES[@]}" -e "$RSYNC_SSH" "$src" "$USER_NAME@$HOST:$rdest"
       elif [[ ${#EXCLUDES[@]} -gt 0 ]]; then
         echo "-x needs rsync on both this machine and the remote host." >&2
         exit 1
       else
         echo "rsync not available on both sides; using scp -r (symlinks are copied as regular files)." >&2
-        scp -i "$KEY" -r "$src" "$USER_NAME@$HOST:$rdest"
+        scp -i "$KEY" "${MUX_OPTS[@]}" -r "$src" "$USER_NAME@$HOST:$rdest"
       fi
     else
-      scp -i "$KEY" "$src" "$USER_NAME@$HOST:$rdest"
+      scp -i "$KEY" "${MUX_OPTS[@]}" "$src" "$USER_NAME@$HOST:$rdest"
     fi
   done
   exit 0
@@ -453,15 +461,15 @@ for target in "$@"; do
     remote="${target%/}"
     if have_rsync; then
       # -a keeps symlinks, permissions and timestamps (scp -r would follow symlinks).
-      rsync -a "${RSYNC_EXCLUDES[@]}" -e "ssh -i $(printf '%q' "$KEY")" "$USER_NAME@$HOST:$remote" .
+      rsync -a "${RSYNC_PROGRESS[@]}" "${RSYNC_EXCLUDES[@]}" -e "$RSYNC_SSH" "$USER_NAME@$HOST:$remote" .
     elif [[ ${#EXCLUDES[@]} -gt 0 ]]; then
       echo "-x needs rsync on both this machine and the remote host." >&2
       exit 1
     else
       echo "rsync not available on both sides; using scp -r (symlinks are copied as regular files)." >&2
-      scp -i "$KEY" -r "$USER_NAME@$HOST:$remote" .
+      scp -i "$KEY" "${MUX_OPTS[@]}" -r "$USER_NAME@$HOST:$remote" .
     fi
   else
-    scp -i "$KEY" "$USER_NAME@$HOST:$target" .
+    scp -i "$KEY" "${MUX_OPTS[@]}" "$USER_NAME@$HOST:$target" .
   fi
 done
