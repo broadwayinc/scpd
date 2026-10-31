@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Usage: scpd [-t target] [-i keyfile] [-u user] [-H host] <path>...
+# Folders use rsync -a when available on both sides, else scp -r.
 # A path ending with '/' is downloaded as a folder, otherwise as a file.
 # Connection settings come from named targets in scpd.conf (see README.md).
 set -euo pipefail
@@ -308,7 +309,7 @@ usage() {
   local status="${1:-1}" out=1
   [[ "$status" -eq 0 ]] || out=2
   cat >&"$out" <<'EOF'
-Usage: scpd [-t target] [-i keyfile] [-u user] [-H host] <path>...
+Usage: scpd [-t target] [-i keyfile] [-u user] [-H host] [-x pattern] <path>...
        scpd -l [-t target] <path>...
        scpd -c [name] | -T | -d | -h
 
@@ -317,6 +318,8 @@ Usage: scpd [-t target] [-i keyfile] [-u user] [-H host] <path>...
   -i  override the target's key file
   -u  override the target's remote username
   -H  override the target's remote host
+  -x  exclude folder contents matching PATTERN (repeatable, e.g. -x node_modules);
+      folder downloads only, needs rsync on both machines
   -l  list remote path(s) instead of downloading
   -c  add or edit a target (asks for its values)
   -T  list configured targets
@@ -332,14 +335,16 @@ MODE="download"
 TARGET=""
 OPT_KEY="" OPT_USER="" OPT_HOST=""
 SSH_EXTRA=()
+EXCLUDES=()
 
 # -C (complete) and -N (print target names) are internal flags used by the tab completion script.
-while getopts "t:i:u:H:hdlcTCN" opt; do
+while getopts "t:i:u:H:x:hdlcTCN" opt; do
   case "$opt" in
     t) TARGET="$OPTARG" ;;
     i) OPT_KEY="$OPTARG" ;;
     u) OPT_USER="$OPTARG" ;;
     H) OPT_HOST="$OPTARG" ;;
+    x) EXCLUDES+=("$OPTARG") ;;
     d) open_docs; exit 0 ;;
     l) MODE="list" ;;
     c) MODE="configure" ;;
@@ -384,6 +389,22 @@ if [[ -z "$DEST" ]]; then
 fi
 mkdir -p "$DEST"
 
+RSYNC_EXCLUDES=()
+for pat in ${EXCLUDES[@]+"${EXCLUDES[@]}"}; do
+  RSYNC_EXCLUDES+=(--exclude "$pat")
+done
+
+# True when rsync exists locally and on the remote host (checked once).
+have_rsync() {
+  if [[ -z "${RSYNC_OK:-}" ]]; then
+    RSYNC_OK=no
+    if command -v rsync >/dev/null 2>&1 && run_ssh "command -v rsync" >/dev/null 2>&1; then
+      RSYNC_OK=yes
+    fi
+  fi
+  [[ "$RSYNC_OK" == yes ]]
+}
+
 for target in "$@"; do
   case "$target" in
     "~"*|/*) ;;
@@ -393,7 +414,16 @@ for target in "$@"; do
 
   if [[ "$target" == */ ]]; then
     remote="${target%/}"
-    scp -i "$KEY" -r "$USER_NAME@$HOST:$remote" "$DEST/"
+    if have_rsync; then
+      # -a keeps symlinks, permissions and timestamps (scp -r would follow symlinks).
+      rsync -a "${RSYNC_EXCLUDES[@]}" -e "ssh -i $(printf '%q' "$KEY")" "$USER_NAME@$HOST:$remote" "$DEST/"
+    elif [[ ${#EXCLUDES[@]} -gt 0 ]]; then
+      echo "-x needs rsync on both this machine and the remote host." >&2
+      exit 1
+    else
+      echo "rsync not available on both sides; using scp -r (symlinks are copied as regular files)." >&2
+      scp -i "$KEY" -r "$USER_NAME@$HOST:$remote" "$DEST/"
+    fi
   else
     scp -i "$KEY" "$USER_NAME@$HOST:$target" "$DEST/"
   fi

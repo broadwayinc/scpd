@@ -13,7 +13,7 @@ _scpd_complete() {
   case "$prev" in
     -i) mapfile -t COMPREPLY < <(compgen -f -- "$cur"); return 0 ;;
     -t) mapfile -t COMPREPLY < <(compgen -W "$(bash "$_SCPD_SH" -N 2>/dev/null)" -- "$cur"); return 0 ;;
-    -u|-H) return 0 ;;
+    -u|-H|-x) return 0 ;;
   esac
 
   # Reuse any -t/-i/-u/-H the user already typed.
@@ -29,7 +29,7 @@ _scpd_complete() {
   done
 
   if [[ "$cur" == -* ]]; then
-    mapfile -t COMPREPLY < <(compgen -W "-t -i -u -H -l -c -T -d -h" -- "$cur")
+    mapfile -t COMPREPLY < <(compgen -W "-t -i -u -H -x -l -c -T -d -h" -- "$cur")
     return 0
   fi
 

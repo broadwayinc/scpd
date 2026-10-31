@@ -98,6 +98,8 @@ Override the key, username, or host of the chosen target for one invocation:
 scpd -i "$HOME/.ssh/other.pem" -u ubuntu -H example.com /remote/path/file.txt
 ```
 
+Folders (paths ending in `/`) are downloaded with `rsync -a` when rsync is installed on both machines, which preserves symlinks, permissions and timestamps. Otherwise `scpd` falls back to `scp -r`, which copies symlinks as regular files (this breaks `node_modules/.bin`). Use `-x PATTERN` (repeatable, needs rsync) to skip files, e.g. `scpd -x node_modules /remote/project/`.
+
 Downloads go to the target's `dest`, and a relative `dest` or key path such as `./scp` is resolved from the directory where you run `scpd`.
 
 ## Tab completion
