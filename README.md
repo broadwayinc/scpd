@@ -12,6 +12,39 @@ From the directory containing `scpd.sh`, run:
 
 This installs the `scpd` command in `~/.local/bin` (or `$XDG_BIN_HOME` if set). If that directory is not in your `PATH`, add it as instructed by the installer and open a new terminal.
 
+### Install with one command (no checkout)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/broadwayinc/scpd/main/install-scpd.sh | bash
+```
+
+When `install-scpd.sh` is not next to `scpd.sh` (piped into `bash`, or downloaded on its own), it downloads `scpd.sh`, `scpd-completion.bash`, `README.md` and `uninstall-scpd.sh` into `~/.local/share/scpd` (or `$SCPD_HOME`) and installs the command from there. It still asks about tab completion; to answer up front, end the command with `| bash -s -- --completion` or `| bash -s -- --no-completion`.
+
+Targets are saved in `~/.local/share/scpd/scpd.conf`. If the previous `scpd` launcher pointed at another copy that has a `scpd.conf`, that file is copied over. Your SSH key is not part of the install: copy it to the new machine, then run `scpd -c`.
+
+Run the same command again to update; saved targets are kept. To uninstall, run `bash ~/.local/share/scpd/uninstall-scpd.sh`, then delete `~/.local/share/scpd` if you also want to remove saved targets.
+
+### Host the installer on your own server
+
+Put `install-scpd.sh` on any web server and install with:
+
+```bash
+curl -fsSL https://my.server.com/install-scpd.sh | bash
+```
+
+The installer still downloads the other files from GitHub. To serve everything yourself, put the four files listed above in the same folder as `install-scpd.sh` and change `DEFAULT_BASE_URL` at the top of your copy to that folder's URL (or set it for one run: `curl -fsSL URL | SCPD_BASE_URL=https://my.server.com/scpd bash`).
+
+For a shorter URL such as `https://my.server.com/scpd`, map the path to the file, for example in nginx:
+
+```nginx
+location = /scpd {
+    default_type text/plain;
+    alias /var/www/install/install-scpd.sh;
+}
+```
+
+Use HTTPS and `curl -fsSL`: without `-f`, curl pipes an error page into `bash`. The installer refuses a downloaded file that is not a bash script, and does nothing if the installer itself was cut off mid-download.
+
 ## Configure
 
 Connection settings are stored as named **targets** in `scpd.conf`, in the same directory as `scpd.sh`. There are no built-in defaults: the first time you run `scpd` with no targets, it asks for the values and saves them.
